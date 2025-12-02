@@ -7,12 +7,13 @@ on:
     branches: [ main ]
 
 permissions:
-  contents: write   # required to push to CD repo with GITHUB_TOKEN or PAT
+  contents: write   # to push to CD repo
 
 env:
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
+
   compile:
     runs-on: ubuntu-latest
     steps:
@@ -22,7 +23,7 @@ jobs:
       - name: Set up Node.js (LTS recommended)
         uses: actions/setup-node@v4
         with:
-          node-version: '23'   # use LTS if you don't need v23
+          node-version: '23'
 
       - name: Frontend Compilation (Syntax Check)
         run: |
@@ -41,13 +42,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Gitleaks Setup
+      - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
-
-      - name: Gitleaks Scan
-        run: |
-          gitleaks detect --source ./client --exit-code 1
-          gitleaks detect --source ./api --exit-code 1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          verbose: true
 
   trivy_fs_scan:
     runs-on: ubuntu-latest
@@ -56,7 +56,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run Trivy vulnerability scanner (FS)
+      - name: Run Trivy FS Scan
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
@@ -121,7 +121,7 @@ jobs:
           file: ./client/Dockerfile
           push: true
           tags: |
-            RashdouNdzekasaah/frontend:latest
+            RashidouNdzekasaah/frontend:latest
             RashidouNdzekasaah/frontend:${{ env.IMAGE_TAG }}
 
   trivy_image_scan:
@@ -130,21 +130,21 @@ jobs:
       - build_backend_docker_image_and_push
       - build_frontend_docker_image_and_push
     steps:
-      - name: Checkout (noop, keeps workspace consistent)
+      - name: Checkout (noop)
         uses: actions/checkout@v4
 
-      - name: Run Trivy image scan for backend
+      - name: Trivy Scan Backend Image
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: image
           image-ref: RashidouNdzekasaah/backend:${{ env.IMAGE_TAG }}
           format: table
-          exit-code: '0'                 # set to '1' to fail on vulns
+          exit-code: '0'
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
-      - name: Run Trivy image scan for frontend
+      - name: Trivy Scan Frontend Image
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: image
@@ -167,36 +167,36 @@ jobs:
           token: ${{ secrets.CD_REPO_TOKEN }}
           path: cd
 
-      - name: Bump images in manifests (safe)
+      - name: Update image tags in CD manifests
         working-directory: cd
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
           curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 -o yq && sudo install yq /usr/local/bin/yq
 
-          # -- Safety cleanup: remove any accidental .spec.template from Service docs
+          # Remove invalid spec.template from service
           yq -i '(. | select(.kind=="Service")) |= del(.spec.template)' k8s-prod/backend.yaml
           yq -i '(. | select(.kind=="Service")) |= del(.spec.template)' k8s-prod/frontend.yaml
 
-          # -- Update ONLY Deployment images (backend)
+          # Update backend deployment image
           yq -i '
             (. | select(.kind=="Deployment")
-               | .spec.template.spec.containers[]
-               | select(.name=="backend")
-               | .image)
+              | .spec.template.spec.containers[]
+              | select(.name=="backend")
+              | .image)
             = "RashidouNdzekasaah/backend:" + strenv(IMAGE_TAG)
           ' k8s-prod/backend.yaml
 
-          # -- Update ONLY Deployment images (frontend)
+          # Update frontend deployment image
           yq -i '
             (. | select(.kind=="Deployment")
-               | .spec.template.spec.containers[]
-               | select(.name=="frontend")
-               | .image)
+              | .spec.template.spec.containers[]
+              | select(.name=="frontend")
+              | .image)
             = "RashidouNdzekasaah/frontend:" + strenv(IMAGE_TAG)
           ' k8s-prod/frontend.yaml
 
-      - name: Commit & push to CD repo
+      - name: Commit & push changes
         working-directory: cd
         run: |
           git config user.name "ci-bot"
